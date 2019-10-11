@@ -7,8 +7,12 @@
 					ORG $9000		
 
 ; ----------------------------------------------------------------------------
-; TODO:
+; TODO: real access display while in trace/step
+;		set displaybytes/+1 on memory access.
+; 
 ;		port to 65816 - 24bit addresses, 16 bit registers, 64k contiguous AUX, 2.8mhz
+;
+;
 ;
 ; ----------------------------------------------------------------------------
 
@@ -49,6 +53,7 @@ KSWL				EQU	$38			; keyboard input routine
 KSWH				EQU	$39			; normally $FD1B
 	
 HIPCH				EQU	$FE			; is the PC above 32k limit?	
+HIPCOFFSET			EQU	$FD			; 80 or 70. SPAGHETTI!
 
 KBDBUF          	EQU $C000       ; KEYBOARD BUFFER
 KBDSTROBE       	EQU $C010       ; KEYBOARD STROBE
@@ -188,6 +193,10 @@ SBC10				STA PCH				; store resulting PCH
 MAIN   				SEI	               ;  DON'T ALLOW INTERRUPTS
        				CLD	               ;  CLEAR DECIMAL MODE
        				LDX	#$00           ;  LOAD INDEX
+
+					LDA #$80
+					STA HIPCOFFSET		; set offset
+
  					; **** add $10 to SIMH
 					CLC
 					LDA SIMH
@@ -197,8 +206,7 @@ MAIN   				SEI	               ;  DON'T ALLOW INTERRUPTS
 					CMP #$7F			; if it's >=32K boundary after add $10, get from AUX
 					BCC STASIMM2
 					STA RAMRDON			; set AUX READ
-
-					SBC #$80			; subtract #$80
+					SBC HIPCOFFSET		; subtract #$80
 					CLC					; read from AUX, still write to MAIN
 										; add #$80
 										; set MAIN READ
@@ -222,8 +230,7 @@ DECSIMH				SEC					; then subtract #$10... oof.
 					STA RAMRDOFF		; high = turn it off, etc
 					CLC					; add #$80 to SIMH again
 					LDA SIMH
-
-					ADC #$80			
+					ADC HIPCOFFSET			
 					STA SIMH								
 
 CHECKPCH								; is PC looking above #$8FFF?
@@ -424,7 +431,8 @@ PUSHT  				TXA	              	; TEMP SAVE - x=0A on set return, gets PCL/H
        				PLA	              	; RECOVER TEMP SAVE
        				TAX	              	;
 
-
+					LDY #$80
+					STY HIPCOFFSET		; offset 80 for PUSH???
 
 RPMEM  				LDY	#$01          	; CLEAR INDEX
 
@@ -434,9 +442,8 @@ RPMEM  				LDY	#$01          	; CLEAR INDEX
 					LDA DESTDA,Y		; $04 + $12 = $16 DESTDA
 					STA DISPLAYBYTES	; high byte to first bank of LEDs.
 					CMP #$7F			; over 9000?
-					BCC RPMEM2			; nope, skip math
-
-					SBC #$80			; off by $10 ??? *** 
+					BCC RPMEM2		; nope, skip math
+					SBC HIPCOFFSET		; off by $10 ??? *** 
 					STA RAMWRTON		; write to AUX
 					STA DESTDA,Y					
 
@@ -471,8 +478,7 @@ RPLP   				LDA	SIMM,X        	;GET NEXT RP DATA
 					BCS	STADESTDA2		; Over 1000, skip
 
 STADESTDA3			SEC
-
-					SBC #$80
+					SBC HIPCOFFSET
 					STA RAMWRTON
 					STA DESTDA+1
 					
@@ -483,8 +489,7 @@ STADESTDA2			PLA					; get RP data back
 					BPL RPLP2
 					CLC
 					LDA DESTDA+1
-
-					ADC #$80
+					ADC HIPCOFFSET
 					STA DESTDA+1
 					STA RAMWRTOFF		; write to MAIN
 
@@ -592,7 +597,8 @@ RETUN
 					; **** doing a JUMP or CALL - reset HIPCH
 					LDA #$00
 					STA HIPCH
-
+					LDA #$80
+					STA HIPCOFFSET		; set offset
 					; **** doing a JUMP or CALL - reset HIPCH
 
 					LDA SPH
@@ -603,8 +609,7 @@ RETUN
 					CMP #$10
 					BCS RETUN2
 					SEC
-RETUN1				
-					SBC #$80		; *** SPH off by $10?
+RETUN1				SBC HIPCOFFSET		; *** SPH off by $10?
 					STA RAMRDON
 					STA RAMWRTON
 					STA SPH
@@ -623,10 +628,12 @@ RETUN2				CLC
 					BPL RETUN3
 					LDA SPH				; return SPH to high value
 					CLC
-					ADC #$80		; *** SPH off by $10?
+					ADC HIPCOFFSET		; *** SPH off by $10?
 					STA SPH
 					STA RAMRDOFF
 					STA RAMWRTOFF
+					LDA #$80
+					STA HIPCOFFSET		; set offset
 
 RETUN3				LDX	#$0A     		; POP RETURN OFF 
         			BNE	POPIT    		; STACK INTO PC    
@@ -650,6 +657,11 @@ POP     			LSR	A        		; POP?
 POPIT   			TXA	         		; TEMP SAVE INDEX
         			PHA	         		; 
         			
+;***
+;					POP and RETURN get stack offset 70.
+					LDA #$70
+					STA HIPCOFFSET		; set offset
+;***        			
          			
         			JSR	SPPNT    		; PULL OUT STACK DATA 
         			PLA	         		; BUMP SP
@@ -1002,98 +1014,93 @@ STPSW  				STA	PSW            ; SAVE NEW PSW
 
 
 ; ----------------------------------------------------------------------------
-ROTATE  			LDY	SIMA           ; GET ACCUMULATOR
-        			LSR	A              ; IS THIS CMC OR 8TC?
-        			BNE	ROCOMP         ; NO, IT IS A ROTATE .OR CMA
-        			LDA	PSW            ; YES, CHANGE CARRY 
-        			EOR	#$01           ; CMC
+ROTATE  			LDY	SIMA           ; 
+        			LSR	A              ; 
+        			BNE	ROCOMP         ; 
+        			LDA	PSW            ; 
+        			EOR	#$01           ; 
         			BCC	STPS           ; 
-        			ORA	#$01           ; STC
+        			ORA	#$01           ; 
 STPS    			BVS	STPSW          ; 
-; ----------------------------------------------------------------------------
-
-ROCOMP  			BCS	LEFT           ; LEFT OR RIGHT? 
-        			LSR	A              ; CMA?
-        			BNE	ROT            ; NO, ROTATE
-        			TYA	               ; YES, COMMPLEMFNT A
-        			EOR	#$FF           ;
-        			STA	SIMA           ;  DOESN* T SET STATUS 
+ROCOMP  			BCS	LEFT           ; 
+        			LSR	A              ; 
+        			BNE	ROT            ; 
+        			TYA	               ; 
+        			EOR	#$FF           ; 
+        			STA	SIMA           ; 
         			RTS	               ; 
 
 ; ----------------------------------------------------------------------------
-ROT    				TYA	               ; GET ACCUMULATOR
+ROT    				TYA	               ; 
        				BCS	RRC            ; 
-       				LDA	PSW            ; GET 8080 CARRY
+       				LDA	PSW            ; 
 RRC    				LSR	A              ; 
-       				TYA	               ; GET ACCUMULATOR 
-       				ROR	A              ; ROTATE RIGHT
-       				BVS	JCRY           ; GO STORE&SET CARRY
-; ----------------------------------------------------------------------------
-LEFT   				LSR	A              ; DECIMAL ADJUST? IYES# GO 00 IT
-       				BEQ	DAA            ;  N 0 , GET ACCUMULATOR 
-       				TYA	               ; JRLC?
-       				BCS	RLC            ;  NO#GET 8080 CARRY
-       				LDA	PSW            ; MOVE IT INTO MSNIB
-       				ROR	A              ;  
-       				ROR	A              ;  
-RLC    				ASL	A              ;  MOVE IT INTO CARRY
-       				TYA	               ;  G E T ACCUMULATOR
-       				ROL	A              ; MOVE IT LEFT
-JCRY   				STA	SIMA           ;  SAVE IT
-       				JMP	CARRY          ; GO SET STATUS
- 
+       				TYA	               ; 
+       				ROR	A              ; 
+       				BVS	JCRY           ; 
+LEFT   				LSR	A              ; 
+       				BEQ	DAA            ; 
+       				TYA	               ; 
+       				BCS	RLC            ; 
+       				LDA	PSW            ; 
+       				ROR	A              ; 
+       				ROR	A              ; 
+RLC    				ASL	A              ; 
+       				TYA	               ; 
+       				ROL	A              ; 
+JCRY   				STA	SIMA           ; 
+       				JMP	CARRY          ; 
+
 ; ----------------------------------------------------------------------------
 DAA    				CLC	               ;
-       				PHP	               ;PRE3ERVE STATUS | 
-       				TYA	               ;GET SOURCE DATA
-       				STA	ZERO          ; PREP FOR ADD
-       				AND	#$0F           ;LOOK AT LSNI8
-       				ADC	#$06           ;IF  *0A WILL CAUSE AUX CRY
-       				ORA	PSW            ;OR I F AC I S ALREADY SET 
-       				AND	#$10           ; EITHER SET?
-       				BEQ	NOSIX          ;NO, DON  T ADJUST LSNIB
-       				LDA	#$06           ; YES# ADJUST IT
-NOSIX  				TAY	               ; 
-       				ADC	ZERO          ;   G E T SOURCE
+       				PHP	               ;
+       				TYA	               ;
+       				STA	ZERO          ; 
+       				AND	#$0F           ;
+       				ADC	#$06           ;
+       				ORA	PSW            ;
+       				AND	#$10           ;
+       				BEQ	NOSIX          ;
+       				LDA	#$06           ;
+NOSIX  				TAY	               ;
+       				ADC	ZERO          ; 
        				BCS	SXTY           ;
-       				ADC	#$60           ;113 MSNIB NOW >  A0T IIF SO* CARRY IS SET
-       				ROL	A              ;G E T CARRY
-       				ORA	PSW            ;OR WITH 8080 CARRY
-       				LSR	A              ;I S EITHER SETT
-       				BCC	DA             ;NO# DON'T ADJUST MSNIB l
-SXTY   				TYA	               ;YES* ADJUST MSN!B I
-       				ADC	#$5F           ;(5F + CARRY = 60)
+       				ADC	#$60           ;
+       				ROL	A              ;
+       				ORA	PSW            ;
+       				LSR	A              ;
+       				BCC	DA             ;
+SXTY   				TYA	               ;
+       				ADC	#$5F           ;
        				TAY	               ;
-DA     				LDX	#$00           ;DESTINATION IS A
-       				PLP	               ;RESTQRE STATUS
+DA     				LDX	#$00           ;
+       				PLP	               ;
 ADCRY  				JSR	ADDR           ; 
        				JSR	CARRY          ;
-
-
 STATUS2 	
-					TAY	               ; SAVE RESULT
-        			ROL	PSW            ; CLEAR P3W SIGN BIT 
-        			ASL	A              ; PUT NEW SIGN IN CARRY 
-        			STA	FLAG           ;  C L E A R L S B OF F L A G 
-        			LDA	PSW            ;  PUT NEW SIGN IN P3N
-        			ROR	A              ;
-SGN     			ORA	#$46           ; PRESET Z*P 8 PRESET
-        			TAX	               ; 3AVE IN X
-        			TYA	               ;  RECOVER WORD
-        			BEQ	DONE           ;  I F ZERO*ALL DONE
-FLIP    			INC	FLAG           ; IFLIP FLAG |
-PAR     			LSR	A              ; TEST EACH BIT I
-        			BEQ	ALL2           ; NO MORE BITS
+					TAY	               ; 
+        			ROL	PSW            ; 
+        			ASL	A              ; 
+        			STA	FLAG           ; 
+        			LDA	PSW            ; 
+        			ROR	A              ; 
+SGN     			ORA	#$46           ; 
+        			TAX	               ; 
+        			TYA	               ; 
+        			BEQ	DONE           ; 
+FLIP    			INC	FLAG           ; 
+PAR     			LSR	A              ; 
+        			BEQ	ALL2           ; 
         			BCC	PAR            ; 
 ALL2    			BCS	FLIP           ; 
-        			LSR	FLAG           ; TEST FLAG 
-        			TXA	               ; RECOVER P3w 
-        			AND	#$BF           ; CLEAR Z 
-        			BCS	REC            ; PARITY EVENT 
-        			AND	#$FB           ; N0* CLEAR P 
-REC     			TAX	               ; BACK TO X
-DONE    			STX	PSW            ; STORE AS PSW
-        			RTS	               ;  
+        			LSR	FLAG           ; 
+        			TXA	               ; 
+        			AND	#$BF           ; 
+        			BCS	REC            ; 
+        			AND	#$FB           ; 
+REC     			TAX	               ; 
+DONE    			STX	PSW            ; 
+        			RTS	               ; 
 
 ; ----------------------------------------------------------------------------
 
@@ -1165,6 +1172,8 @@ DEC    				LDY	#$0C           ; point to DEC data
 ; ----------------------------------------------------------------------------
 MEMRP 				TYA					; grab source pointer offset
 
+					LDY #$80
+					STY HIPCOFFSET
 
 					LDA DESTDA+1
 					
@@ -1176,7 +1185,7 @@ MEMRP 				TYA					; grab source pointer offset
 					BCS MRLP1
 AUXMEMRP			STA RAMRDON			; read from AUX
 					SEC
-					SBC #$80
+					SBC HIPCOFFSET
 					STA DESTDA+1
 
 MRLP1				LDY	#$01           ; move data in memory
@@ -1192,9 +1201,11 @@ MRLP  				LDA	(DESTDA),Y     ; get next byte
 					STA RAMRDOFF		; read from MAIN
 					LDA DESTDA+1
 					CLC
-					ADC #$80
+					ADC HIPCOFFSET
 					STA DESTDA+1
 					
+					LDA #$80
+					STA HIPCOFFSET		; set offset
 
 					
 MRLPRTS				RTS	               ;
@@ -2649,11 +2660,11 @@ CHOOSER2				ASC "   1 FOR KILL-THE-BIT",00
 CHOOSER3				ASC "   2 FOR 4K BASIC",00
 CHOOSER4				ASC "   3 FOR 8K BASIC",00
 CHOOSER5				ASC "   4 FOR MICROCHESS",00
-CHOOSER6				ASC "   5 FOR DBL ROM AT $00",00
+CHOOSER6				ASC "   5 FOR DISK BOOTLOADER",00
 CHOOSER7				ASC "   0 FOR NO PROGRAM",00
 
 CHOOSERTBL			DB	>CHOOSER1,<CHOOSER1,>CHOOSER2,<CHOOSER2,>CHOOSER3,<CHOOSER3
-					DB	>CHOOSER4,<CHOOSER4,>CHOOSER5,<CHOOSER5,>CHOOSER6,<CHOOSER6
+					DB	>CHOOSER4,<CHOOSER4,>CHOOSER5,<CHOOSER5,>CHOOSER6,<CHOOSER6,>CHOOSER7,<CHOOSER7
 
 
 
@@ -2665,7 +2676,7 @@ CHOOSERLOOP			LDY CHOOSERTBL,X
 					JSR STROUT				;Y=String ptr high, A=String ptr low
 					JSR CROUT
 					INX
-					CPX #$0C
+					CPX #$0E
 					BNE CHOOSERLOOP
 
 CHOOSERWAITLOOP		LDX #$00
@@ -3004,7 +3015,7 @@ DSKREADLOC		DB	<BASICBUFFER,>BASICBUFFER					; write to end of sim8800
 DSKTRANSFERRED	DB	$00,$00				
 
 DSKFILE			DB	ENDDSKNAME-DSKNAME 			;Length of name
-DSKNAME    		ASC	'/SIM8800/ZORK.DSK' 		;followed by the name
+DSKNAME    		ASC	'/SIM8800/VIRTUAL.DSK' 		;followed by the name
 ENDDSKNAME 		EQU	*
 
 WRITEDSK		JSR MLI
