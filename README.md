@@ -9,6 +9,6 @@ Additional operating instructions can be found in the APPLE-80 manual. [https://
 
 Release 2.0
 
-Requires an Apple IIe with 64K auxiliary memory, 80 column card, or appropriate emulator.
+Requires an Enhanced Apple IIe with 128K total memory or appropriate emulator.
 
 
